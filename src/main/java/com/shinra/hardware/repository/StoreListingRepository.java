@@ -17,7 +17,7 @@ public interface StoreListingRepository extends JpaRepository<StoreListing, Long
 
     Optional<StoreListing> findByProduct_IdAndStore_Id(Long productId, Integer storeId);
 
-    @Query("SELECT MIN(sl.currentPrice) FROM StoreListing sl "+"WHERE sl.product.id = :productId AND sl.isInStock = true")
+    @Query("SELECT MIN(sl.currentPrice) FROM StoreListing sl "+" WHERE sl.product.id = :productId AND sl.isInStock = true")
     Optional<BigDecimal> findMinPriceByProductId(@Param("productId") Long productId);
 
     @Query("SELECT sl FROM StoreListing sl WHERE sl.lastCheckedAt < :cutoffDate OR sl.lastCheckedAt IS NULL")

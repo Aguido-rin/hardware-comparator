@@ -128,16 +128,12 @@ public class ProductServiceImpl implements ProductService {
 
         for (DiscoveredProductDTO dto : products) {
             try {
+
                 if (storeListingRepository.existsByUrlSource(dto.url())) {
                     continue;
                 }
 
-                Store store = resolveStoreFromUrl(dto.url());
-                if (store == null) {
-                    System.err.println("❌ [IMPORT] Tienda no reconocida para URL: " + dto.url());
-                    continue;
-                }
-
+                Store store = resolveOrCreateStore(dto);
                 Product product = productRepository.findByModelName(dto.title())
                         .orElseGet(() -> createNewProductFromDTO(dto));
 
@@ -150,18 +146,14 @@ public class ProductServiceImpl implements ProductService {
                 listing.setLastCheckedAt(OffsetDateTime.now());
 
                 storeListingService.saveListing(listing);
-
                 importedCount++;
 
             } catch (Exception e) {
-
-                System.err.println("❌ Error importando item '" + dto.title() + "': " + e.getMessage());
+                System.err.println("Error importando item: " + dto.title() + " -> " + e.getMessage());
             }
         }
         return importedCount;
     }
-
-    // --- MÉTODOS PRIVADOS AUXILIARES ---
 
     private Product createNewProductFromDTO(DiscoveredProductDTO dto) {
         Product newProduct = new Product();
@@ -171,49 +163,71 @@ public class ProductServiceImpl implements ProductService {
         newProduct.setIsActive(true);
 
         Category category = categoryRepository.findBySlug(dto.categorySlug())
-                .orElseThrow(() -> new RuntimeException("Categoría desconocida: " + dto.categorySlug()));
-        newProduct.setCategory(category);
+                .orElseGet(() -> createNewCategory(dto.categorySlug()));
 
+        newProduct.setCategory(category);
         newProduct.setTechSpecs(Map.of("source", "auto_scraped"));
 
         return productRepository.save(newProduct);
     }
 
-    private Store resolveStoreFromUrl(String url) {
-        String lowerUrl = url.toLowerCase();
+    private Category createNewCategory(String slug) {
+        Category newCat = new Category();
+        newCat.setSlug(slug);
 
-        if (lowerUrl.contains("amazon")) return getStoreByKeyword("amazon");
-        if (lowerUrl.contains("coolbox")) return getStoreByKeyword("coolbox");
-        if (lowerUrl.contains("mercadolibre")) return getStoreByKeyword("mercadolibre");
-        if (lowerUrl.contains("aliexpress")) return getStoreByKeyword("aliexpress");
-        if (lowerUrl.contains("cyberpuerta")) return getStoreByKeyword("cyberpuerta");
-        if (lowerUrl.contains("memorykings")) return getStoreByKeyword("memorykings");
-        return null;
+        String name = slug.substring(0, 1).toUpperCase() + slug.substring(1).toLowerCase();
+        newCat.setName(name);
+        return categoryRepository.save(newCat);
+    }
+
+    private Store resolveOrCreateStore(DiscoveredProductDTO dto) {
+        String lowerUrl = dto.url().toLowerCase();
+        Store foundStore = null;
+
+        if (lowerUrl.contains("amazon")) foundStore = getStoreByKeyword("amazon");
+        else if (lowerUrl.contains("coolbox")) foundStore = getStoreByKeyword("coolbox");
+        else if (lowerUrl.contains("mercadolibre")) foundStore = getStoreByKeyword("mercadolibre");
+        else if (lowerUrl.contains("aliexpress")) foundStore = getStoreByKeyword("aliexpress");
+
+        if (foundStore != null) return foundStore;
+
+        Store newStore = new Store();
+        newStore.setName(dto.storeName() != null ? dto.storeName() : "Tienda Desconocida");
+        newStore.setBaseUrl(extractBaseUrl(dto.url()));
+        newStore.setLogoUrl("");
+        newStore.setScrapeFrequencyHours(24);
+
+        return storeRepository.save(newStore);
     }
 
     private Store getStoreByKeyword(String keyword) {
-
         return storeRepository.findByBaseUrlContaining(keyword)
                 .stream().findFirst().orElse(null);
+    }
+
+    private String extractBaseUrl(String productUrl) {
+        try {
+            java.net.URI uri = new java.net.URI(productUrl);
+            return uri.getScheme() + "://" + uri.getHost();
+        } catch (Exception e) {
+            return productUrl;
+        }
     }
 
     private String detectBrand(String title) {
         if (title == null) return "Genérico";
         String upper = title.toUpperCase();
-
         if (upper.contains("ASUS")) return "ASUS";
         if (upper.contains("MSI")) return "MSI";
         if (upper.contains("GIGABYTE")) return "Gigabyte";
         if (upper.contains("AMD") || upper.contains("RYZEN")) return "AMD";
         if (upper.contains("INTEL") || upper.contains("CORE")) return "Intel";
         if (upper.contains("NVIDIA") || upper.contains("GEFORCE") || upper.contains("RTX")) return "NVIDIA";
-        if (upper.contains("KINGSTON") || upper.contains("FURY")) return "Kingston";
+        if (upper.contains("KINGSTON")) return "Kingston";
         if (upper.contains("CORSAIR")) return "Corsair";
         if (upper.contains("LOGITECH")) return "Logitech";
         if (upper.contains("RAZER")) return "Razer";
-        if (upper.contains("HYPERX")) return "HyperX";
         if (upper.contains("SAMSUNG")) return "Samsung";
-
         return "Genérico";
     }
 }

@@ -54,26 +54,8 @@ public class ProductController {
 
     @PostMapping("/import")
     public ResponseEntity<String> importDiscoveredProducts(@RequestBody List<DiscoveredProductDTO> newProducts) {
-        int count = 0;
-
-        for (DiscoveredProductDTO dto : newProducts) {
-            Product product = new Product();
-            product.setModelName(dto.title());
-            product.setBrand("Generico");
-            product.setImageUrl(dto.imageUrl());
-            productService.saveProduct(product);
-
-            StoreListing listing = new StoreListing();
-            listing.setProduct(product);
-            listing.setUrlSource(dto.url());
-            listing.setCurrentPrice(dto.price());
-            listing.setIsInStock(true);
-
-            listingService.saveListing(listing);
-            count++;
-        }
-
-        return ResponseEntity.ok("Importados " + count + " productos.");
+        int count = productService.importDiscoveredProducts(newProducts);
+        return ResponseEntity.ok("Procesados: " + count + " productos (Duplicados ignorados).");
     }
 
     @GetMapping("/search")

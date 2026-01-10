@@ -19,7 +19,7 @@ import java.util.stream.Collectors;
 public class StoreListingServiceImpl implements StoreListingService {
 
     private final StoreListingRepository storeListingRepository;
-    private final PriceHistoryRepository priceHistoryRepository; // Necesitamos crear este repo rápido
+    private final PriceHistoryRepository priceHistoryRepository;
 
     @Autowired
     public StoreListingServiceImpl(StoreListingRepository storeListingRepository,
@@ -41,6 +41,15 @@ public class StoreListingServiceImpl implements StoreListingService {
     @Transactional
     public StoreListing saveListing(StoreListing listing) {
         return storeListingRepository.save(listing);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<StoreListingDTO> getAllListings() {
+        return storeListingRepository.findAll()
+                .stream()
+                .map(this::mapToDTO)
+                .collect(Collectors.toList());
     }
 
     @Override
@@ -70,7 +79,6 @@ public class StoreListingServiceImpl implements StoreListingService {
         storeListingRepository.deleteById(listingId);
     }
 
-    // --- Mapper Privado ---
     private StoreListingDTO mapToDTO(StoreListing entity) {
         return new StoreListingDTO(
                 entity.getId(),
@@ -78,6 +86,7 @@ public class StoreListingServiceImpl implements StoreListingService {
                 entity.getStore().getLogoUrl(),
                 entity.getCurrentPrice(),
                 entity.getAffiliateLinkGenerated() != null ? entity.getAffiliateLinkGenerated() : entity.getUrlSource(),
+                entity.getUrlSource(),
                 entity.getIsInStock(),
                 entity.getLastCheckedAt()
         );

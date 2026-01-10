@@ -1,8 +1,12 @@
 package com.shinra.hardware.controller;
 
+import com.shinra.hardware.dto.DiscoveredProductDTO;
 import com.shinra.hardware.dto.ProductDTO;
 import com.shinra.hardware.model.Product;
+import com.shinra.hardware.model.StoreListing;
 import com.shinra.hardware.service.ProductService;
+import com.shinra.hardware.service.StoreListingService;
+import com.shinra.hardware.service.StoreService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -17,20 +21,23 @@ public class ProductController {
     private final ProductService productService;
 
     @Autowired
+    private StoreService storeService;
+    @Autowired
+    private StoreListingService listingService;
+
+    @Autowired
     public ProductController(ProductService productService) {
         this.productService = productService;
     }
 
-    // 1. Obtener todos (Mapeados a DTO)
     @GetMapping
     public ResponseEntity<List<ProductDTO>> getAllProducts() {
         List<ProductDTO> dtos = productService.findAllProducts().stream()
-                .map(this::convertToDTO) // Convertimos cada entidad a DTO
+                .map(this::convertToDTO)
                 .collect(Collectors.toList());
         return ResponseEntity.ok(dtos);
     }
 
-    // 2. Obtener por ID
     @GetMapping("/{id}")
     public ResponseEntity<ProductDTO> getProductById(@PathVariable Long id) {
         return productService.findProductById(id)
@@ -39,15 +46,36 @@ public class ProductController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    // 3. Crear
     @PostMapping
     public ResponseEntity<ProductDTO> createProduct(@RequestBody Product product) {
-        // Nota: Recibimos Entity, devolvemos DTO
         Product savedProduct = productService.saveProduct(product);
         return ResponseEntity.ok(convertToDTO(savedProduct));
     }
 
-    // 4. Búsqueda por Keyword (Para tu barra de búsqueda)
+    @PostMapping("/import")
+    public ResponseEntity<String> importDiscoveredProducts(@RequestBody List<DiscoveredProductDTO> newProducts) {
+        int count = 0;
+
+        for (DiscoveredProductDTO dto : newProducts) {
+            Product product = new Product();
+            product.setModelName(dto.title());
+            product.setBrand("Generico");
+            product.setImageUrl(dto.imageUrl());
+            productService.saveProduct(product);
+
+            StoreListing listing = new StoreListing();
+            listing.setProduct(product);
+            listing.setUrlSource(dto.url());
+            listing.setCurrentPrice(dto.price());
+            listing.setIsInStock(true);
+
+            listingService.saveListing(listing);
+            count++;
+        }
+
+        return ResponseEntity.ok("Importados " + count + " productos.");
+    }
+
     @GetMapping("/search")
     public ResponseEntity<List<ProductDTO>> searchProducts(@RequestParam String q) {
         List<ProductDTO> dtos = productService.searchProductsByName(q).stream()
@@ -56,7 +84,6 @@ public class ProductController {
         return ResponseEntity.ok(dtos);
     }
 
-    // 5. Filtrar por ID de Categoría
     @GetMapping("/category/{categoryId}")
     public ResponseEntity<List<ProductDTO>> getByCategory(@PathVariable Integer categoryId) {
         List<ProductDTO> dtos = productService.findActiveProductsByCategoryId(categoryId).stream()

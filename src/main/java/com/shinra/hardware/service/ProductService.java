@@ -1,5 +1,6 @@
 package com.shinra.hardware.service;
 
+import com.shinra.hardware.dto.DiscoveredProductDTO;
 import com.shinra.hardware.model.Product;
 import java.util.List;
 import java.util.Optional;
@@ -19,5 +20,8 @@ public interface ProductService {
     List<Product> findProductsByBrand(String brand);
 
     Double findBestPriceForProduct(Long productId);
+
+    int importDiscoveredProducts(List<DiscoveredProductDTO> products);
+
     List<Product> searchProductsByName(String keyword);
 }

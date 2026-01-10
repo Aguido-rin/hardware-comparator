@@ -10,6 +10,8 @@ public interface StoreListingService {
 
     List<StoreListingDTO> getListingsForProduct(Long productId);
 
+    List<StoreListingDTO> getAllListings();
+
     StoreListing saveListing(StoreListing listing);
 
     void updateListingPrice(Long listingId, BigDecimal newPrice, Boolean inStock);

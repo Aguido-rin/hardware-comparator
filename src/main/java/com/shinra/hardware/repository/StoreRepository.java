@@ -9,6 +9,7 @@ import java.util.Optional;
 @Repository
 public interface StoreRepository extends JpaRepository<Store, Integer> {
 
-    // Encontrar una tienda por su nombre
     Optional<Store> findByName(String name);
+
+    Optional<Store> findByBaseUrlContaining(String domainKeyword);
 }

@@ -62,18 +62,13 @@ public class ProductServiceImpl implements ProductService {
     @Transactional
     public Product updateProduct(Long id, Product productDetails) {
         return productRepository.findById(id).map(existingProduct -> {
-
             existingProduct.setModelName(productDetails.getModelName());
             existingProduct.setBrand(productDetails.getBrand());
             existingProduct.setImageUrl(productDetails.getImageUrl());
             existingProduct.setIsActive(productDetails.getIsActive());
-
             existingProduct.setCategory(productDetails.getCategory());
-
             existingProduct.setTechSpecs(productDetails.getTechSpecs());
-
             return productRepository.save(existingProduct);
-
         }).orElseThrow(() -> new RuntimeException("Producto no encontrado con ID: " + id));
     }
 
@@ -85,10 +80,6 @@ public class ProductServiceImpl implements ProductService {
         }
         productRepository.deleteById(id);
     }
-
-    // ----------------------------------------------------------------
-    // Consultas Repository Personalizadas
-    // ----------------------------------------------------------------
 
     @Override
     @Transactional(readOnly = true)
@@ -105,13 +96,8 @@ public class ProductServiceImpl implements ProductService {
     @Override
     @Transactional(readOnly = true)
     public List<Product> searchProductsByName(String keyword) {
-        // Usa: findByModelNameContainingIgnoreCase
         return productRepository.findByModelNameContainingIgnoreCase(keyword);
     }
-
-    // ----------------------------------------------------------------
-    // LÓGICA DE PRECIOS
-    // ----------------------------------------------------------------
 
     @Override
     @Transactional(readOnly = true)
@@ -121,6 +107,10 @@ public class ProductServiceImpl implements ProductService {
                 .orElse(null);
     }
 
+    // ----------------------------------------------------------------
+    // LÓGICA DE IMPORTACIÓN
+    // ----------------------------------------------------------------
+
     @Override
     @Transactional
     public int importDiscoveredProducts(List<DiscoveredProductDTO> products) {
@@ -128,32 +118,55 @@ public class ProductServiceImpl implements ProductService {
 
         for (DiscoveredProductDTO dto : products) {
             try {
-
-                if (storeListingRepository.existsByUrlSource(dto.url())) {
-                    continue;
-                }
-
+                // 1. Resolver Tienda (Buscar o Crear)
                 Store store = resolveOrCreateStore(dto);
+
+                // 2. Resolver Producto (Buscar o Crear)
                 Product product = productRepository.findByModelName(dto.title())
                         .orElseGet(() -> createNewProductFromDTO(dto));
 
-                StoreListing listing = new StoreListing();
-                listing.setProduct(product);
-                listing.setStore(store);
-                listing.setUrlSource(dto.url());
-                listing.setCurrentPrice(dto.price());
-                listing.setIsInStock(true);
-                listing.setLastCheckedAt(OffsetDateTime.now());
+                // 3. BUSCAR LISTING EXISTENTE (Para evitar error de llave duplicada)
+                Optional<StoreListing> existingListing = storeListingRepository
+                        .findByProduct_IdAndStore_Id(product.getId(), store.getId());
 
+                StoreListing listing;
+
+                if (existingListing.isPresent()) {
+                    // --- ACTUALIZAR (UPDATE) ---
+                    listing = existingListing.get();
+                    // Solo actualizamos si el precio o url han cambiado, o para refrescar fecha
+                    listing.setCurrentPrice(dto.price());
+                    listing.setIsInStock(true); // Si lo encontramos, hay stock
+                    listing.setLastCheckedAt(OffsetDateTime.now());
+
+                    // Actualizamos URL si cambió (opcional, pero útil si la tienda cambia links)
+                    if (!listing.getUrlSource().equals(dto.url())) {
+                        listing.setUrlSource(dto.url());
+                    }
+                } else {
+                    // --- INSERTAR NUEVO (CREATE) ---
+                    listing = new StoreListing();
+                    listing.setProduct(product);
+                    listing.setStore(store);
+                    listing.setUrlSource(dto.url());
+                    listing.setCurrentPrice(dto.price());
+                    listing.setIsInStock(true);
+                    listing.setLastCheckedAt(OffsetDateTime.now());
+                }
+
+                // Guardamos (save maneja tanto insert como update)
                 storeListingService.saveListing(listing);
                 importedCount++;
 
             } catch (Exception e) {
-                System.err.println("Error importando item: " + dto.title() + " -> " + e.getMessage());
+                // Logueamos error pero continuamos con el siguiente
+                System.err.println("❌ Error procesando item '" + dto.title() + "': " + e.getMessage());
             }
         }
         return importedCount;
     }
+
+    // --- MÉTODOS PRIVADOS AUXILIARES ---
 
     private Product createNewProductFromDTO(DiscoveredProductDTO dto) {
         Product newProduct = new Product();
@@ -166,7 +179,7 @@ public class ProductServiceImpl implements ProductService {
                 .orElseGet(() -> createNewCategory(dto.categorySlug()));
 
         newProduct.setCategory(category);
-        newProduct.setTechSpecs(Map.of("source", "auto_scraped"));
+        newProduct.setTechSpecs(Map.of("source", "auto_scraped", "imported_at", OffsetDateTime.now().toString()));
 
         return productRepository.save(newProduct);
     }
@@ -174,7 +187,6 @@ public class ProductServiceImpl implements ProductService {
     private Category createNewCategory(String slug) {
         Category newCat = new Category();
         newCat.setSlug(slug);
-
         String name = slug.substring(0, 1).toUpperCase() + slug.substring(1).toLowerCase();
         newCat.setName(name);
         return categoryRepository.save(newCat);
@@ -182,17 +194,12 @@ public class ProductServiceImpl implements ProductService {
 
     private Store resolveOrCreateStore(DiscoveredProductDTO dto) {
         String lowerUrl = dto.url().toLowerCase();
-        Store foundStore = null;
 
-        if (lowerUrl.contains("amazon")) foundStore = getStoreByKeyword("amazon");
-        else if (lowerUrl.contains("coolbox")) foundStore = getStoreByKeyword("coolbox");
-        else if (lowerUrl.contains("mercadolibre")) foundStore = getStoreByKeyword("mercadolibre");
-        else if (lowerUrl.contains("aliexpress")) foundStore = getStoreByKeyword("aliexpress");
-
+        Store foundStore = getStoreByKeyword(extractDomainKeyword(lowerUrl));
         if (foundStore != null) return foundStore;
 
         Store newStore = new Store();
-        newStore.setName(dto.storeName() != null ? dto.storeName() : "Tienda Desconocida");
+        newStore.setName(dto.storeName() != null ? dto.storeName() : "Tienda Nueva");
         newStore.setBaseUrl(extractBaseUrl(dto.url()));
         newStore.setLogoUrl("");
         newStore.setScrapeFrequencyHours(24);
@@ -201,8 +208,28 @@ public class ProductServiceImpl implements ProductService {
     }
 
     private Store getStoreByKeyword(String keyword) {
+        if (keyword.equals("unknown")) return null;
         return storeRepository.findByBaseUrlContaining(keyword)
                 .stream().findFirst().orElse(null);
+    }
+
+    private String extractDomainKeyword(String url) {
+        try {
+            java.net.URI uri = new java.net.URI(url);
+            String host = uri.getHost();
+            if (host != null) {
+                String[] parts = host.split("\\.");
+                if (parts.length >= 2) {
+                    // amazon.com -> amazon
+                    // mercadolibre.com.pe -> mercadolibre (parts length 3)
+                    if (parts[parts.length - 2].equals("com") && parts.length > 2) {
+                        return parts[parts.length - 3];
+                    }
+                    return parts[parts.length - 2];
+                }
+            }
+        } catch (Exception e) {}
+        return "unknown";
     }
 
     private String extractBaseUrl(String productUrl) {

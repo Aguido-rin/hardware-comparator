@@ -7,6 +7,7 @@ import com.shinra.hardware.service.ProductService;
 import com.shinra.hardware.service.StoreListingService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
@@ -112,61 +113,55 @@ public class ProductServiceImpl implements ProductService {
     // ----------------------------------------------------------------
 
     @Override
-    @Transactional
     public int importDiscoveredProducts(List<DiscoveredProductDTO> products) {
         int importedCount = 0;
 
         for (DiscoveredProductDTO dto : products) {
             try {
-                // 1. Resolver Tienda (Buscar o Crear)
-                Store store = resolveOrCreateStore(dto);
-
-                // 2. Resolver Producto (Buscar o Crear)
-                Product product = productRepository.findByModelName(dto.title())
-                        .orElseGet(() -> createNewProductFromDTO(dto));
-
-                // 3. BUSCAR LISTING EXISTENTE (Para evitar error de llave duplicada)
-                Optional<StoreListing> existingListing = storeListingRepository
-                        .findByProduct_IdAndStore_Id(product.getId(), store.getId());
-
-                StoreListing listing;
-
-                if (existingListing.isPresent()) {
-                    // --- ACTUALIZAR (UPDATE) ---
-                    listing = existingListing.get();
-                    // Solo actualizamos si el precio o url han cambiado, o para refrescar fecha
-                    listing.setCurrentPrice(dto.price());
-                    listing.setIsInStock(true); // Si lo encontramos, hay stock
-                    listing.setLastCheckedAt(OffsetDateTime.now());
-
-                    // Actualizamos URL si cambió (opcional, pero útil si la tienda cambia links)
-                    if (!listing.getUrlSource().equals(dto.url())) {
-                        listing.setUrlSource(dto.url());
-                    }
-                } else {
-                    // --- INSERTAR NUEVO (CREATE) ---
-                    listing = new StoreListing();
-                    listing.setProduct(product);
-                    listing.setStore(store);
-                    listing.setUrlSource(dto.url());
-                    listing.setCurrentPrice(dto.price());
-                    listing.setIsInStock(true);
-                    listing.setLastCheckedAt(OffsetDateTime.now());
-                }
-
-                // Guardamos (save maneja tanto insert como update)
-                storeListingService.saveListing(listing);
+                processSingleProductImport(dto);
                 importedCount++;
-
             } catch (Exception e) {
-                // Logueamos error pero continuamos con el siguiente
-                System.err.println("❌ Error procesando item '" + dto.title() + "': " + e.getMessage());
+                System.err.println("Error procesando item '" + dto.title() + "': " + e.getMessage());
             }
         }
         return importedCount;
     }
 
-    // --- MÉTODOS PRIVADOS AUXILIARES ---
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    protected void processSingleProductImport(DiscoveredProductDTO dto) {
+        Store store = resolveOrCreateStore(dto);
+
+        Product product = productRepository.findByModelName(dto.title())
+                .orElseGet(() -> createNewProductFromDTO(dto));
+
+        Optional<StoreListing> existingListing = storeListingRepository
+                .findByProduct_IdAndStore_Id(product.getId(), store.getId());
+
+        StoreListing listing;
+
+        if (existingListing.isPresent()) {
+            listing = existingListing.get();
+            listing.setCurrentPrice(dto.price());
+            listing.setIsInStock(true);
+            listing.setLastCheckedAt(OffsetDateTime.now());
+
+            if (!listing.getUrlSource().equals(dto.url())) {
+                listing.setUrlSource(dto.url());
+            }
+        } else {
+            listing = new StoreListing();
+            listing.setProduct(product);
+            listing.setStore(store);
+            listing.setUrlSource(dto.url());
+            listing.setCurrentPrice(dto.price());
+            listing.setIsInStock(true);
+            listing.setLastCheckedAt(OffsetDateTime.now());
+        }
+
+        storeListingService.saveListing(listing);
+    }
+
+    // --- MÉTODOS AUXILIARES ---
 
     private Product createNewProductFromDTO(DiscoveredProductDTO dto) {
         Product newProduct = new Product();
@@ -195,11 +190,24 @@ public class ProductServiceImpl implements ProductService {
     private Store resolveOrCreateStore(DiscoveredProductDTO dto) {
         String lowerUrl = dto.url().toLowerCase();
 
-        Store foundStore = getStoreByKeyword(extractDomainKeyword(lowerUrl));
+        // 1. Intentar buscar por palabra clave en URL (ej: "amazon")
+        String domainKeyword = extractDomainKeyword(lowerUrl);
+        Store foundStore = getStoreByKeyword(domainKeyword);
+
         if (foundStore != null) return foundStore;
 
+        // 2. 🔥 NUEVO: Si falla por URL, buscar por NOMBRE exacto (ej: "Amazon")
+        // Esto evita el error de llave duplicada si la tienda ya existe con ese nombre.
+        String storeNameTarget = dto.storeName() != null ? dto.storeName() : "Tienda (" + domainKeyword + ")";
+        Optional<Store> storeByName = storeRepository.findByName(storeNameTarget);
+
+        if (storeByName.isPresent()) {
+            return storeByName.get();
+        }
+
+        // 3. Si no existe ni por URL ni por Nombre, CREARLA
         Store newStore = new Store();
-        newStore.setName(dto.storeName() != null ? dto.storeName() : "Tienda Nueva");
+        newStore.setName(storeNameTarget);
         newStore.setBaseUrl(extractBaseUrl(dto.url()));
         newStore.setLogoUrl("");
         newStore.setScrapeFrequencyHours(24);
@@ -220,8 +228,6 @@ public class ProductServiceImpl implements ProductService {
             if (host != null) {
                 String[] parts = host.split("\\.");
                 if (parts.length >= 2) {
-                    // amazon.com -> amazon
-                    // mercadolibre.com.pe -> mercadolibre (parts length 3)
                     if (parts[parts.length - 2].equals("com") && parts.length > 2) {
                         return parts[parts.length - 3];
                     }
